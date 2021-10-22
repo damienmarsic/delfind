@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-__version__='0.6.0'
-last_update='2021-10-19'
+__version__='0.9.0'
+last_update='2021-10-22'
 author='Damien Marsic, damien.marsic@aliyun.com'
 
 import argparse,sys,glob,gzip,os,time
@@ -51,12 +51,20 @@ def readfasta(filename):
         sys.exit()
     return seq
 
-def rename(name):
-    if glob.glob(name):
-        t=str(time.time())
-        n=name[:name.rfind('.')]+'-'+t[:t.find('.')]+name[name.rfind('.'):]
-        os.rename(name,n)
-        print('\n  Existing '+name+' file was renamed as '+n+'\n  Creating new '+name+' file...\n')
+def pr2(f,t):
+    print(t)
+    f.write(t+'\n')
+
+def plt0(title,xlabel,ylabel):
+    fig=plt.figure(figsize=(12,6.75))
+    plt.title(title,size=15,weight='roman')
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+
+def plt1(g,h):
+    plt.savefig(g,dpi=600)
+    pr2(h,'  Figure was saved into file: '+g+'\n')
+    plt.close()
 
 def main():
     parser=argparse.ArgumentParser(description="Detection of large deletions in populations of circular genomes. For full documentation, visit: https://delfind.readthedocs.io")
@@ -75,9 +83,8 @@ def main():
     parser_b.add_argument('-c','--clean',type=int,default=100,help="Filter out deletions larger than value expressed in %% of genome size (default: 100%% = no filtering)")
     parser_b.add_argument('-t','--threshold',type=int,default=-1,help="Minimum distance between paired reads for the pair to be considered a deletion (default: -1 = autodetect)")
     parser_b.add_argument('-m','--merge',type=int,default=-1,help="Maximum distance for merging deletions (default: -1 = autodetect)")
-    parser_b.add_argument('-e','--exclude',type=int,default=1,help="Deletions defined by a number of reads equal or lower than that number will be excluded from deletion frequency plot (default: 1)")
     parser_b.add_argument('-f','--format',type=str,default='png',help="File format for figures. Choices: svg, png, jpg, pdf, ps, eps, pgf, raw, rgba, tif. Default: png")
-
+    parser_b.add_argument('-i','--include',type=float,default=0.2,help="Minimum deletion frequency in %% to be included in the report (default: 0.2)")
     args=parser.parse_args()
     if args.command=='map':
         rmap(args)
@@ -85,9 +92,7 @@ def main():
         analyze(args)
 
 def rmap(args):
-    global overlap,probe,slide,ref,cnt,Genome,rlength
-    overlap=0 #   autodetect from a few hundred reads ***********************************************************
-    rlength=150 # autodetect from first few reads !!  ***********************************************************
+    global probe,slide,ref,cnt,Genome,rlength
     R1=args.R1
     R2=args.R2
     Genome=args.genome
@@ -114,22 +119,15 @@ def rmap(args):
         else:
             print('\n  Genome file could not be detected unambiguously!\n')
             sys.exit()
-    if not probe:
-        probe=round(rlength*0.75)
+    check_file(R1,True)
+    check_file(R2,True)
+    check_file(Genome,True)
     if not slide:
         slide=1
         print('\n  Slide value automatically changed to 1 (can not be 0)')
     if slide<0:
         print('\n  Slide value can not be negative!\n')
         sys.exit()
-    print('\n  Starting delfind map with the following arguments:')
-    print('  R1: '+R1+'\n  R2: '+R2+'\n  Genome: '+Genome+'\n  Probe size: '+str(probe)+'\n  Slide range: '+str(slide)+'\n  Limit: '+str(limit))
-    check_file(R1,True)
-    check_file(R2,True)
-    check_file(Genome,True)
-    gfile=Genome[:Genome.rfind('.')]
-    Genome=readfasta(Genome)
-    ref=Genome+Genome[:rlength]
     if R1[-3:]=='.gz':
         f1=gzip.open(R1,'rt')
     else:
@@ -138,6 +136,32 @@ def rmap(args):
         f2=gzip.open(R2,'rt')
     else:
         f2=open(R2,'r')
+    z=2
+    cnt=0
+    x=defaultdict(int)
+    while cnt<100:
+        while z<4:
+            l1=f1.readline().strip()
+            l2=f2.readline().strip()
+            if not l1 or not l2:
+                break
+            z+=1
+        if not l1 or not l2:
+            break
+        z=0
+        x[len(l1)]+=1
+        x[len(l2)]+=1
+        cnt+=1
+    rlength=max(x.keys())
+    if not probe:
+        probe=round(rlength*0.75)
+    f1.seek(0)
+    f2.seek(0)
+    print('\n  Starting delfind map with the following settings:')
+    print('  R1: '+R1+'\n  R2: '+R2+'\n  Genome: '+Genome+'\n  Read length: '+str(rlength)+'\n  Probe size: '+str(probe)+'\n  Slide range: '+str(slide)+'\n  Limit: '+str(limit))
+    gfile=Genome[:Genome.rfind('.')]
+    Genome=readfasta(Genome)
+    ref=Genome+Genome[:rlength]
     z=2
     cnt=[0,0,0,0]
     mapped=defaultdict(int)
@@ -220,7 +244,7 @@ def rmap(args):
 
 def locate(l,s):
     x=0
-    while x<overlap+slide:
+    while x<slide:
         if s:
             y=l[x:x+probe]
         else:
@@ -260,7 +284,7 @@ def analyze(args):
     format=args.format
     threshold=args.threshold
     merge=args.merge
-    exclude=args.exclude
+    include=args.include
     if f[-6:]=='.fasta' or f[-3:]=='.fa':
         Genome=args.map
         f=''
@@ -286,43 +310,83 @@ def analyze(args):
     if format not in ('svg','png','jpg','jpeg','pdf','ps','eps','pgf','raw','rgba','tif','tiff'):
         print("\n  File format not recognized! Options are svg, png, jpg, pdf, ps, eps, pgf, raw, rgba, tif, tiff.\n")
         sys.exit()
+    if include<=0 or include>100:
+        print('\n  Include value should be between 0 and 100!\n')
+        sys.exit()
     check_file(f,True)
     check_file(Genome,True)
+    fname=f[:f.rfind('_')]
+    if clean!=100:
+        fname+='_c'+str(clean)
+    if threshold>=0:
+        fname+='_t'+str(threshold)
+    if merge>=0:
+        fname+='_m'+str(merge)
     gsize=len(readfasta(Genome))
     filter=clean*gsize/100
-    rmap=np.genfromtxt(f,delimiter=',').astype(int)
-    if rmap[-1][0]>=gsize:
+    rmap0=np.genfromtxt(f,delimiter=',').astype(int)
+    if rmap0[-1][0]>=gsize:
         print("\n  Wrong genome file!\n")
         sys.exit()
-    rmap=rmap[~(rmap[:,1]>filter)]
-    print('\n  Starting delfind analyze with the following arguments:')
+    rmap0=rmap0[~(rmap0[:,1]>filter)]
+    x=rmap0[rmap0[:,2]>1].tolist()
+    rmap1=np.delete(rmap0,2,1)
+    for i in range(len(x)):
+        for j in range(x[i][2]-2):
+            x.append(x[i][:-1])
+        del x[i][-1]
+    rmap1=np.append(rmap1,x,0)
+    del x
+    rmap1=rmap1[rmap1[:,0].argsort()]
+    ins=round(np.mean(rmap1[:,1]))
+
+
+
+
+###  plan to calculate threshold from distance distribution:
+
+    d=defaultdict(int)
+    for n in rmap0:
+        d[n[1]]+=n[2]
+
+
+#### to be continued....
+
     if threshold<0:
-        threshold=round(np.mean(rmap[rmap[:,1]>0][:,1])*2+500)
+        threshold=round(np.mean(rmap1[rmap1[:,1]>0][:,1])*2+500)  #  Temporary threshold definition !
+
+
+    ins0=round(np.mean(rmap1[rmap1[:,1]<threshold][:,1]))
+    ins1=round(np.mean(rmap1[rmap1[:,1]>=threshold][:,1]))
+    sd=round(np.std(rmap1[rmap1[:,1]<threshold][:,1]))
     if merge<0:
-        merge=round(np.std(rmap[rmap[:,1]<threshold][:,1]))
-    print('  Map file: '+f+'\n  Genome file: '+Genome+'\n  Clean: '+str(clean)+'%\n  Threshold: '+str(threshold)+' bp'+'\n  Merge: '+str(merge)+' bp'+'\n  Format: '+format+'\n')
-    nr=np.sum(rmap[:,2])
-    nd=rmap[rmap[:,1]>=threshold][:,0].size
-    print('  Total number of read pairs: '+str(nr)+'\n  Deletion read pairs: '+str(nd)+' ('+str(round(nd/nr*100,2))+'%)\n')
-    fig=plt.figure(figsize=(12,6.75))
-    plt.title('Distribution of read pair distances along genome',size=15,weight='roman')
-    plt.xlabel("Genome position")
-    plt.ylabel("Distance (bp)")
+        merge=sd
+    h=open(fname+'_report.txt','w')
+    pr2(h,'\n  Starting delfind analyze with the following settings:')
+    pr2(h,'  Map file: '+f+'\n  Genome file: '+Genome+'\n  Clean: '+str(clean)+'%\n  Threshold: '+str(threshold)+' bp'+'\n  Merge: '+str(merge)+' bp'+'\n  Format: '+format+'\n')
+    nr=np.size(rmap1,0)
+    nd=np.size(rmap1[rmap1[:,1]>=threshold],0)
+    pr2(h,'  Total number of read pairs: '+str(nr)+'\n  Deletion read pairs: '+str(nd)+' ('+str(round(nd/nr*100,2))+'%)')
+    pr2(h,'  Average insert size: '+str(ins)+' bp\n  Average under threshold insert size: '+str(ins0)+' bp\n  Average above threshold insert (deletion) size: '+str(ins1)+' bp\n')
+    plt0('Distribution of read pair distances','Distance (bp)','Number of read pairs')
+    x=[(n,d[n]) for n in d if n<threshold]
+    plt.plot(x[0],x[1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
+    x=[(n,d[n]) for n in d if n>=threshold]
+    plt.plot(x[0],x[1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
+    plt.legend(loc='upper right')
+    g=fname+'_distances-distr.'+format
+    plt1(g,h)
+    plt0('Distribution of read pair distances along genome','Genome position','Distance (bp)')
     plt.xlim(0,gsize)
-    plt.plot(rmap[rmap[:,1]<threshold][:,0],rmap[rmap[:,1]<threshold][:,1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
-    plt.plot(rmap[rmap[:,1]>=threshold][:,0],rmap[rmap[:,1]>=threshold][:,1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
+    plt.plot(rmap1[rmap1[:,1]<threshold][:,0],rmap1[rmap1[:,1]<threshold][:,1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
+    plt.plot(rmap1[rmap1[:,1]>=threshold][:,0],rmap1[rmap1[:,1]>=threshold][:,1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
     plt.legend(loc='upper left')
-    z='_c'+str(clean)
-    if clean==100:
-        z=''
-    g=f[:f.rfind('_')]+z+'_distances.'+format
-    plt.savefig(g,dpi=600)
-    print('  Figure was saved into file: '+g+'\n')
-    plt.close()
+    g=fname+'_distances-genome.'+format
+    plt1(g,h)
     x=range(gsize)
     y1=[0]*(gsize)
     y2=[0]*(gsize)
-    for n in rmap:
+    for n in rmap0:
         for i in range(n[1]):
             if n[0]+i<gsize and n[1]<threshold:
                 y1[n[0]+i]+=n[2]
@@ -332,103 +396,89 @@ def analyze(args):
                 y1[n[0]+i-gsize]+=n[2]
             elif n[0]+i>=gsize and n[1]>=threshold:
                 y2[n[0]+i-gsize]+=n[2]
-    fig=plt.figure(figsize=(12,6.75))
-    plt.title('Sequencing coverage of read pair distances along genome',size=15,weight='roman')
-    plt.xlabel("Genome position")
-    plt.ylabel("Coverage")
+    plt0('Sequencing coverage of read pair distances along genome','Genome position','Coverage')
     plt.xlim(0,gsize)
     plt.stackplot(x,y1,y2,labels=['<'+str(threshold),'>='+str(threshold)])
     plt.legend(loc='upper left')
-    w='_c'+str(clean)
-    if clean==100:
-        w=''
-    w+='_t'+str(threshold)
-    g=f[:f.rfind('_')]+w+'_coverage.'+format
-    plt.savefig(g,dpi=600)
-    print('  Figure was saved into file: '+g+'\n')
-    plt.close()
+    g=fname+'_coverage.'+format
+    plt1(g,h)
     dels=[]
     i=-1
     b=0
-    x=[]
     rem=[]
-    while i+1<len(rmap):
+    while i+1<len(rmap0):
         i+=1
-        if rmap[i][1]<threshold or i in rem:
+        if i in rem or rmap0[i][1]<threshold:
             continue
-        x=(rmap[i][0],)*2+(rmap[i][0]+rmap[i][1],)*2+(rmap[i][2],)
+        x=(rmap0[i][0],)*2+(rmap0[i][0]+rmap0[i][1],)*2+(rmap0[i][2],)
         rem.append(i)
         b=i
-        while i+1<len(rmap):
+        while i+1<len(rmap0):
             i+=1
-            if rmap[i][1]<threshold or i in rem:
+            if i in rem or rmap0[i][1]<threshold:
                 continue
-            if rmap[i][0]-x[1]>merge:
+            if rmap0[i][0]-x[1]>merge:
                 break
-            y=rmap[i][0]+rmap[i][1]
+            y=rmap0[i][0]+rmap0[i][1]
             if abs(y-x[2])>merge and abs(y-x[3])>merge:
                 continue
-            x=(min(x[0],rmap[i][0]),max(x[1],rmap[i][0]),min(x[2],y),max(x[3],y),x[4])
+            x=(min(x[0],rmap0[i][0]),max(x[1],rmap0[i][0]),min(x[2],y),max(x[3],y),x[4]+rmap0[i][2])
             rem.append(i)
         dels.append(x)
         i=b
-
-# Merge deletions here !
-
-
-
+    rem=[]
+    for i in range(len(dels)):
+        if dels[i][4]==1:
+            continue
+        j=i+1
+        while j<len(dels) and dels[j][0]<=dels[i][1]:
+            if j not in rem and dels[j][3]>=dels[i][2] and dels[j][2]<=dels[i][3]:
+                rem.append(j)
+                dels[i]=(min(dels[i][0],dels[j][0]),max(dels[i][1],dels[j][1]),min(dels[i][2],dels[j][2]),max(dels[i][3],dels[j][3]),dels[i][4]+dels[j][4])
+            j+=1
+    rem.sort(reverse=True)
+    for i in rem:
+        del dels[i]
     y=[k[4] for k in dels]
     i=y.index(max(y))
     x1=dels[i][0]
     x2=dels[i][1]
-    y=np.sum(rmap[(rmap[:,0]>=x1)&(rmap[:,0]<=x2)][:,2])
+    y=np.size(rmap1[(rmap1[:,0]>=x1)&(rmap1[:,0]<=x2)],0)
     for i in range(len(dels)):
         dels[i]=dels[i]+(100*dels[i][4]/y,)
     dels.sort(key=lambda x:x[5], reverse=True)
-    w+='_m'+str(merge)
-    g=f[:f.rfind('_')]+w+'_frequencies.csv'
+    g=fname+'_frequencies.csv'
     np.savetxt(g,dels,delimiter=',',fmt=['%d','%d','%d','%d','%d','%f'])
-    print('  Deletion frequencies were saved into file: '+g+'\n')
+    pr2(h,'  Deletion frequencies were saved into file: '+g+'\n')
 
 
 
-# Plot distribution of deletion _frequencies
+# Add plot distributions of deletion frequencies / deletion sizes ?
 
 
 
 
-    fig=plt.figure(figsize=(12,6.75))
-    plt.title('Deletion frequency as a function of deletion size',size=15,weight='roman')
-    plt.xlabel("Deletion size")
-    plt.ylabel("Deletion frequency")
+    plt0('Deletion frequency as a function of deletion size','Deletion size','Deletion frequency')
     plt.plot([n[2]-n[1] for n in dels],[n[5] for n in dels],marker='.',linestyle='',markersize=1)
-    g=g.replace('frequencies.csv','frequency_size.'+format)
-    plt.savefig(g,dpi=600)
-    print('  Figure was saved into file: '+g+'\n')
-    plt.close()
-
-    fig=plt.figure(figsize=(12,6.75))
-    plt.title('Deletion frequencies along genome',size=15,weight='roman')
-    plt.xlabel("Genome position")
-    plt.ylabel("Frequency (%)")
+    g=fname+'_frequency_size.'+format
+    plt1(g,h)
+    plt0('Deletion frequencies along genome','Genome position','Frequency (%)')
     plt.xlim(0,gsize)
     for n in dels:
         plt.plot((n[1],n[2]),(n[5],n[5]),alpha=0.4)
-    g=g.replace('_frequency_size','_locations_frequencies')
-    plt.savefig(g,dpi=600)
-    print('  Figure was saved into file: '+g+'\n')
-    plt.close()
-
-
-
-
-# Show graph all / restrict to more than 1 read per deletions
-# X axis: genome coordinate
-# Y axis: frequency and deletion size
-   # ex: bar chart with Y=frequency and color=deletion Size
-   # ex: bubble chart with y=frequency and bubble size= deletion size
-   # ex: y=deletion size, bubble size=frequency
-
+    g=fname+'_locations_frequencies.'+format
+    plt1(g,h)
+    pr2(h,'  Top deletions (>='+str(include)+'%):\n        Genome location       Size (bp)   Frequency (%)')
+    for n in dels:
+        if n[5]<include:
+            break
+        x='('+str(n[1])+', '+str(n[2])+')'
+        y=str(n[2]-n[1])
+        z=str(round(n[5],2))
+        pr2(h,' '*(23-len(x))+x+' '*(16-len(y))+y+' '*(16-len(z))+z)
+    pr2(h,'')
+    h.close()
+    print('  Report was saved into file: '+fname+'_report.txt\n')
 
 if __name__ == '__main__':
     main()
