@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-__version__='0.9.0'
+__version__='0.9.1'
 last_update='2021-10-22'
 author='Damien Marsic, damien.marsic@aliyun.com'
 
@@ -369,10 +369,10 @@ def analyze(args):
     pr2(h,'  Total number of read pairs: '+str(nr)+'\n  Deletion read pairs: '+str(nd)+' ('+str(round(nd/nr*100,2))+'%)')
     pr2(h,'  Average insert size: '+str(ins)+' bp\n  Average under threshold insert size: '+str(ins0)+' bp\n  Average above threshold insert (deletion) size: '+str(ins1)+' bp\n')
     plt0('Distribution of read pair distances','Distance (bp)','Number of read pairs')
-    x=[(n,d[n]) for n in d if n<threshold]
-    plt.plot(x[0],x[1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
-    x=[(n,d[n]) for n in d if n>=threshold]
-    plt.plot(x[0],x[1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
+    x=np.array([(n,d[n]) for n in d if n<threshold])
+    plt.plot(x[:,0],x[:,1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
+    x=np.array([(n,d[n]) for n in d if n>=threshold])
+    plt.plot(x[:,0],x[:,1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
     plt.legend(loc='upper right')
     g=fname+'_distances-distr.'+format
     plt1(g,h)
