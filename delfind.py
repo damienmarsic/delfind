@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-__version__='0.9.1'
-last_update='2021-10-22'
+__version__='0.9.2'
+last_update='2021-11-03'
 author='Damien Marsic, damien.marsic@aliyun.com'
 
 import argparse,sys,glob,gzip,os,time
@@ -66,6 +66,13 @@ def plt1(g,h):
     pr2(h,'  Figure was saved into file: '+g+'\n')
     plt.close()
 
+def rename(name):
+    if glob.glob(name):
+        t=str(time.time())
+        n=name[:name.rfind('.')]+'-'+t[:t.find('.')]+name[name.rfind('.'):]
+        os.rename(name,n)
+        print('\n  Existing '+name+' file was renamed as '+n+'\n  Creating new '+name+' file...\n')
+
 def main():
     parser=argparse.ArgumentParser(description="Detection of large deletions in populations of circular genomes. For full documentation, visit: https://delfind.readthedocs.io")
     parser.add_argument('-v','--version',nargs=0,action=override(version),help="Display version")
@@ -85,11 +92,18 @@ def main():
     parser_b.add_argument('-m','--merge',type=int,default=-1,help="Maximum distance for merging deletions (default: -1 = autodetect)")
     parser_b.add_argument('-f','--format',type=str,default='png',help="File format for figures. Choices: svg, png, jpg, pdf, ps, eps, pgf, raw, rgba, tif. Default: png")
     parser_b.add_argument('-i','--include',type=float,default=0.2,help="Minimum deletion frequency in %% to be included in the report (default: 0.2)")
+    parser_c=subparser.add_parser('snapgene',help="Add deletion features to genome file in Genbank format to be used in Snapgene viewer")
+    parser_c.add_argument('deletions',nargs='?',default='',type=str,help="File containing the deletion frequencies in csv format (optional if no ambiguity)")
+    parser_c.add_argument('genome',nargs='?',default='',type=str,help="File containing the annotated genome in Genbank format (optional if no ambiguity)")
+    parser_c.add_argument('-i','--include',type=float,default=0.2,help="Minimum deletion frequency in %% to be included as a feature in the annotated genome file (default: 0.2)")
+    parser_c.add_argument('-o','--outfile',type=str,default=None,help="Name of output file. If none provided, the input file name will be used for the output file, and the input file will be renamed.")
     args=parser.parse_args()
     if args.command=='map':
         rmap(args)
     if args.command=='analyze':
         analyze(args)
+    if args.command=='snapgene':
+        snapgene(args)
 
 def rmap(args):
     global probe,slide,ref,cnt,Genome,rlength
@@ -234,7 +248,6 @@ def rmap(args):
     if limit:
         gfile+='_'+str(limit)
     gfile+='_map.csv'
-    rename(gfile)
     g=open(gfile,'w')
     for n in sorted(mapped):
         g.write(str(n[0])+','+str(n[1])+','+str(mapped[n])+'\n')
@@ -472,13 +485,86 @@ def analyze(args):
     for n in dels:
         if n[5]<include:
             break
-        x='('+str(n[1])+', '+str(n[2])+')'
+        x='['+str(n[1]+1)+'..'+str(n[2])+']'
         y=str(n[2]-n[1])
         z=str(round(n[5],2))
         pr2(h,' '*(23-len(x))+x+' '*(16-len(y))+y+' '*(16-len(z))+z)
     pr2(h,'')
     h.close()
     print('  Report was saved into file: '+fname+'_report.txt\n')
+
+def snapgene(args):
+    dels=args.deletions
+    genome=args.genome
+    include=args.include
+    outfile=args.outfile
+    if (genome[-4:]=='.csv' and (not dels or dels[-4:]!='.csv')) or ((dels[-3:]=='.gb' or dels[-4:]=='.gbk') and (not genome or (genome[-3:]!='.gb' and genome[-4:]!='.gbk'))):
+        genome,dels=dels,genome
+    if dels and dels[-4:]!='.csv':
+        print('\n  Deletion frequencies file must be in csv format!\n')
+        sys.exit()
+    if genome and genome[-3:]!='.gb' and genome[-4:]!='.gbk':
+        print('\n  Annotated genome file must be in Genbank format!\n')
+        sys.exit()
+    if not dels:
+        x=glob.glob('*_frequencies.csv')
+        if len(x)==1:
+            dels=x[0]
+        else:
+            print('\n  Deletion frequencies file could not be detected unambiguously!\n')
+            sys.exit()
+    if not genome:
+        x=glob.glob('*.gb*')
+        if len(x)==1:
+            genome=x[0]
+        else:
+            print('\n  Genome file could not be detected unambiguously!\n')
+            sys.exit()
+    check_file(dels,True)
+    check_file(genome,True)
+    if include<=0 or include>100:
+        print('\n  Include value should be between 0 and 100!\n')
+        sys.exit()
+    if not outfile:
+        outfile=genome
+    if outfile[-3:]!='.gb' and outfile[-4:]!='.gbk':
+        outfile+='.gb'
+    D=[]
+    f=open(dels,'r')
+    for line in f:
+        ln=line.strip().split(',')
+        if float(ln[5])<include:
+            break
+        D.append((int(ln[1])+1,ln[2],str(round(float(ln[5]),2))))
+    D.sort()
+    f.close()
+    f=open(genome,'r')
+    x=f.read()
+    a=x.find('FEATURES')
+    b=x[a:].find('\n')+1
+    y=x[:a+b]
+    w=x[a+b:].split('\n')
+    end=False
+    for ln in w:
+        if ln[:6]=='ORIGIN':
+            end=True
+        if not end and ln[:6]!='      ':
+            a=int(''.join(filter(lambda i: i.isdigit(),ln[:ln.find('..')])))
+            if D and D[0][0]<a:
+                b=D.pop(0)
+                a='     misc_feature    '+str(b[0])+'..'+b[1]+'\n                     /label=Del '+b[2]+'%\n                     /note="color: #ffff00; direction: BOTH"\n'
+                if not a in x:
+                    y+=a
+        y+=ln+'\n'
+    f.close()
+    rename(outfile)
+    with open(outfile,'w') as f:
+        f.write(y)
+    print('  Modified annotated genome was saved into file: '+outfile+'\n')
+
+
+#  ADD COVERAGE !!!
+
 
 if __name__ == '__main__':
     main()
