@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-__version__='0.9.2'
-last_update='2021-11-03'
+__version__='0.9.5'
+last_update='2021-11-09'
 author='Damien Marsic, damien.marsic@aliyun.com'
 
 import argparse,sys,glob,gzip,os,time
@@ -73,16 +73,24 @@ def rename(name):
         os.rename(name,n)
         print('\n  Existing '+name+' file was renamed as '+n+'\n  Creating new '+name+' file...\n')
 
+def lncount(f):
+    def _make_gen(reader):
+        b=reader(1024*1024)
+        while b:
+            yield b
+            b=reader(1024*1024)
+    f_gen=_make_gen(f.read)
+    return sum(buf.count(b'\n') for buf in f_gen)
+
 def main():
     parser=argparse.ArgumentParser(description="Detection of large deletions in populations of circular genomes. For full documentation, visit: https://delfind.readthedocs.io")
     parser.add_argument('-v','--version',nargs=0,action=override(version),help="Display version")
     subparser=parser.add_subparsers(dest='command',required=True)
-    parser_a=subparser.add_parser('map',help="Map read pairs to genome, arguments are optional if no ambiguity (if 2 arguments: read files, if 1 argument: genome sequence file)")
+    parser_a=subparser.add_parser('map',help="Map reads to genome, arguments are optional if no ambiguity (if 2 arguments: read files, if 1 argument: genome sequence file)")
     parser_a.add_argument('R1',nargs='?',default='',type=str,help="File containing the R1 reads in fastq or fastq.gz format")
     parser_a.add_argument('R2',nargs='?',default='',type=str,help="File containing the R2 reads in fastq or fastq.gz format")
     parser_a.add_argument('genome',nargs='?',default='',type=str,help="File containing the genome in fasta format")
-    parser_a.add_argument('-p','--probe',type=int,default=None,help="Size in nt of read fragment to be mapped (default: 75%% of read length)")
-    parser_a.add_argument('-s','--slide',type=int,default=30,help="Range in nt of sliding the read fragment to generate a probe to be mapped (default: 30 nt)")
+    parser_a.add_argument('-m','--minimum',type=int,default=None,help="Minimum size in nt of contiguous read sequence identity for mapping to be accepted (default: 75%% of read length)")
     parser_a.add_argument('-l','--limit',type=int,default=None,help="Stop after a number of read pairs have beem processed, instead of processing everything (default: no limit)")
     parser_b=subparser.add_parser('analyze',help="Analyze mapped read pairs to detect and quantify large deletions")
     parser_b.add_argument('map',nargs='?',default='',type=str,help="File containing the read pair maps in csv format (optional if no ambiguity)")
@@ -106,13 +114,13 @@ def main():
         snapgene(args)
 
 def rmap(args):
-    global probe,slide,ref,cnt,Genome,rlength
+    global minimum,ref,Genome,rlength
+    print('\n  Checking arguments...',end='')
     R1=args.R1
     R2=args.R2
     Genome=args.genome
     limit=args.limit
-    probe=args.probe
-    slide=args.slide
+    minimum=args.minimum
     if args.R1 and not args.R2 and not args.genome:
         R1=''
         Genome=args.R1
@@ -136,11 +144,21 @@ def rmap(args):
     check_file(R1,True)
     check_file(R2,True)
     check_file(Genome,True)
-    if not slide:
-        slide=1
-        print('\n  Slide value automatically changed to 1 (can not be 0)')
-    if slide<0:
-        print('\n  Slide value can not be negative!\n')
+    print('         OK\n\n  Counting reads...',end='')
+    if R1[-3:]=='.gz':
+        f1=gzip.open(R1,'r')
+    else:
+        f1=open(R1,'rb')
+    if R2[-3:]=='.gz':
+        f2=gzip.open(R2,'r')
+    else:
+        f2=open(R2,'rb')
+    nr1=lncount(f1)//4
+    nr2=lncount(f2)//4
+    f1.close()
+    f2.close()
+    if nr1!=nr2:
+        print('\n  Read files must have the same number of reads! Please use raw read files!\n')
         sys.exit()
     if R1[-3:]=='.gz':
         f1=gzip.open(R1,'rt')
@@ -150,145 +168,178 @@ def rmap(args):
         f2=gzip.open(R2,'rt')
     else:
         f2=open(R2,'r')
-    z=2
+    Z=2
+    print('             OK\n\n  Determining Read length...',end='')
     cnt=0
     x=defaultdict(int)
     while cnt<100:
-        while z<4:
+        while Z<4:
             l1=f1.readline().strip()
             l2=f2.readline().strip()
             if not l1 or not l2:
                 break
-            z+=1
+            Z+=1
         if not l1 or not l2:
             break
-        z=0
+        Z=0
         x[len(l1)]+=1
         x[len(l2)]+=1
         cnt+=1
     rlength=max(x.keys())
-    if not probe:
-        probe=round(rlength*0.75)
+    if not minimum:
+        minimum=round(rlength*0.75)
+    elif minimum>rlength:
+        minimum=rlength
     f1.seek(0)
     f2.seek(0)
-    print('\n  Starting delfind map with the following settings:')
-    print('  R1: '+R1+'\n  R2: '+R2+'\n  Genome: '+Genome+'\n  Read length: '+str(rlength)+'\n  Probe size: '+str(probe)+'\n  Slide range: '+str(slide)+'\n  Limit: '+str(limit))
+    print('    OK\n\n  Starting delfind map with the following settings:')
+    print('  R1: '+R1+' ('+str(nr1)+' reads)\n  R2: '+R2+' ('+str(nr2)+' reads)\n  Genome: '+Genome+'\n  Read length: '+str(rlength)+'\n  Minimum map size: '+str(minimum)+'\n  Limit: '+str(limit))
     gfile=Genome[:Genome.rfind('.')]
     Genome=readfasta(Genome)
     ref=Genome+Genome[:rlength]
-    z=2
-    cnt=[0,0,0,0]
-    mapped=defaultdict(int)
-    print('\n  Read pairs processed   Read pairs mapped')
+    Z=2
+    cnt=[0,0,0,0,0]
+    rmap=defaultdict(int)
+    pmap=defaultdict(int)
+    y=np.arange(0,nr1,nr1/1000)
+    x=[round(n) for n in y]
+    z=np.arange(0,100,0.1)
+    y=[str(round(n,1)) for n in z]
+    show=dict(zip(x,y))
+    print('\n  Processing reads...       0.0%',end='')
     while True:
         if limit and cnt[0]>=limit:
             break
-        while z<4:
+        while Z<4:
             l1=f1.readline().strip()
             l2=f2.readline().strip()
             if not l1 or not l2:
                 break
-            z+=1
-            if z==3:
-                l1=l1[:l1.find(' ')]
-                l2=l2[:l2.find(' ')]
-                if l1!=l2 or l1[0]!='@':
+            Z+=1
+            if Z==3:
+                if l1[:l1.find(' ')]!=l2[:l2.find(' ')] or l1[0]!='@':
                     print('\n  Missing reads or wrong reads file format! Please use raw read files!\n')
                     sys.exit()
         if not l1 or not l2:
             break
-        z=0
+        Z=0
         l1=l1.lower()
         l2=l2.lower()
-        b1=-1
-        b2=-1
         cnt[0]+=1
-        a1=locate(l1,0)
-        a2=locate(l2,0)
-        if a2!=-1:
-            b1=locate(str(Seq(l1).reverse_complement()),1)
-        if a1!=-1:
-            b2=locate(str(Seq(l2).reverse_complement()),1)
-        if a1!=-1 and b1!=-1:
-            cnt[2]+=1
-        if a2!=-1 and b2!=-1:
-            cnt[2]+=1
-        temp=[]
-        if a1!=-1 and b2!=-1:
-            temp.append([a1,b2])
-        if a2!=-1 and b1!=-1:
-            temp.append([a2,b1])
-        if not temp:
+        a1=locate(l1)
+        a2=locate(l2)
+        b1=locate(str(Seq(l1).reverse_complement()))
+        b2=locate(str(Seq(l2).reverse_complement()))
+        A=[a1,b1,a2,b2]
+        x=sum([1 for n in A if n])
+        if cnt[0] in show:
+            x=show[cnt[0]]
+            print('\r  Processing reads...      '+' '*(4-len(x))+x+'%',end='')
+        if not x:
             continue
-        for i in range(len(temp)):
-            if temp[i][0]>=len(Genome):
-                temp[i][0]-=len(Genome)
-            if temp[i][0]>temp[i][1]+rlength+1:
-                temp[i][1]+=len(Genome)
-            temp[i][1]-=temp[i][0]
-        if len(temp)>1:
-            cnt[3]+=1
-            if temp[0][1]<temp[1][1]:
-                del temp[1]
-            elif temp[0][1]>temp[1][1]:
-                del temp[0]
-        if len(temp)>1:
-            continue
-        cnt[1]+=1
-        mapped[(temp[0][0],temp[0][1])]+=1
-        x=str(cnt[0])
-        y=str(cnt[1])
-        print('\r'+' '*(22-len(x))+x+' '*(20-len(y))+y,end='')
+        if x==4:
+            a=a1[0][1]-a1[0][0]+b2[0][1]-b2[0][0]
+            b=a2[0][1]-a2[0][0]+b1[0][1]-b1[0][0]
+        if (x==4 and a>b) or (x==3 and a1 and b2):
+            a2=[]
+            b1=[]
+        elif (x==4 and b>a) or (x==3 and a2 and b1):
+            a1=[]
+            b2=[]
+        elif x==2 and not (a1 and b2) and not (a2 and b1):
+            z=max([n[0][1]-n[0][0] for n in A if n])
+            for i in range(len(A)):
+                if A[i] and A[i][0][1]-A[i][0][0]<z:
+                    A[i]=[]
+            a1,b1,a2,b2=A
+        if (a1 and b2 and b1 and a2) or (a1 and b2 and len(a1+b2)>2) or (a2 and b1 and len(a2+b1)>2):
+            cnt[4]+=1
+        elif (a1 and b2) or (a2 and b1):
+            cnt[2]+=1
+        for n in ((a1,b1),(a2,b2)):
+            if len(n[0]+n[1])>1:
+                cnt[3]+=1
+            elif len(n[0]+n[1])==1:
+                cnt[1]+=1
+        for n in ((a1,b2),(a2,b1)):
+            if not (n[0] and n[1]):
+                continue
+            for x in n[0]:
+                for y in n[1]:
+                    z=[x[1],y[0]]
+                    if z[0]>=len(Genome):
+                        z[0]-=len(Genome)
+                    if z[0]>z[1]+rlength+1:
+                        z[1]+=len(Genome)
+                    z[1]-=z[0]
+                    pmap[tuple(z)]+=1
+        for n in (a1,b2,a2,b1):
+            if not n:
+                continue
+            for x in n:
+                rmap[(x[0],x[1]-x[0])]+=1
     f1.close()
     f2.close()
-    print('\n\n  Read pairs processed: '+str(cnt[0]))
-    print('  Read pairs mapped: '+str(cnt[1]))
-    print('  Reads with more than one match: '+str(cnt[2]))
-    print('  Read pairs with more than one match: '+str(cnt[3])+'\n')
+    print('\b\b\b\b\b\b100.0%\n\n  Read pairs processed: '+str(cnt[0]))
+    print('  Reads mapped exactly once: '+str(cnt[1]))
+    print('  Read pairs mapped exactly once: '+str(cnt[2]))
+    print('  Reads mapped more than once: '+str(cnt[3]))
+    print('  Read pairs mapped more than once: '+str(cnt[4])+'\n')
+    print('  Total mapped reads: '+str(cnt[1]+cnt[3])+' ('+str(round((cnt[1]+cnt[3])/cnt[0]*50,2))+'%)')
+    print('  Total mapped read pairs: '+str(cnt[2]+cnt[4])+' ('+str(round((cnt[2]+cnt[4])/cnt[0]*100,2))+'%)')
     if limit:
         gfile+='_'+str(limit)
-    gfile+='_map.csv'
-    g=open(gfile,'w')
-    for n in sorted(mapped):
-        g.write(str(n[0])+','+str(n[1])+','+str(mapped[n])+'\n')
+    g=open(gfile+'_rmap.csv','w')
+    for n in sorted(rmap):
+        g.write(str(n[0])+','+str(n[1])+','+str(rmap[n])+'\n')
     g.write('\n')
     g.close()
-    print('  Map was saved into file: '+gfile+'\n')
+    print('\n  Read map was saved into file: '+gfile+'_rmap.csv')
+    g=open(gfile+'_pmap.csv','w')
+    for n in sorted(pmap):
+        g.write(str(n[0])+','+str(n[1])+','+str(pmap[n])+'\n')
+    g.write('\n')
+    g.close()
+    print('  Pair map was saved into file: '+gfile+'_pmap.csv\n')
 
-def locate(l,s):
+def locate(l):
+    L=[]
+    a=rlength-minimum
+    b=len(l)-a
+    if not l[a:b] in ref:
+        return L
     x=0
-    while x<slide:
-        if s:
-            y=l[x:x+probe]
-        else:
-            y=l[-x-probe:len(l)-x]
-        n=ref.find(y)
-        if n!=-1 and (ref.count(y)==1 or (y in Genome[:rlength] and Genome.count(y)==1)):
-            if not s:
-                n+=probe
+    y=len(l)
+    while x<a:
+        if l[x:y] in ref:
             break
-        if n==-1:
+        x+=10
+        y-=10
+    else:
+        x=a
+        y=b
+    while x>0:
+        x-=1
+        if l[x:y] not in ref:
             x+=1
-            continue
-        cnt[2]+=1
-        w=0
-        while x+probe+w+1<=len(l):
-            w+=1
-            if s:
-                y=l[x:x+probe+w]
-            else:
-                y=l[-x-probe-w:len(l)-x]
-            n=ref.count(y)
-            if n==1:
-                n=ref.find(y)
-                if not s:
-                    n+=probe+w
-                break
-            if not n:
-                n=-1
-                break
-        break
-    return n
+            break
+    while y<len(l):
+        y+=1
+        if l[x:y] not in ref:
+            y-=1
+            break
+    if y-x<minimum:
+        return L
+    a=0
+    z=l[x:y]
+    while True:
+        n=ref.find(z,a)
+        if n==-1:
+            break
+        a=n+1
+        if z not in Genome[:rlength]:
+            L.append((n,n+len(z)))
+    return L
 
 def analyze(args):
     f=args.map
