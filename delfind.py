@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-__version__='0.9.5'
-last_update='2021-11-09'
+__version__='0.9.6'
+last_update='2021-11-12'
 author='Damien Marsic, damien.marsic@aliyun.com'
 
 import argparse,sys,glob,gzip,os,time
@@ -93,9 +93,8 @@ def main():
     parser_a.add_argument('-m','--minimum',type=int,default=None,help="Minimum size in nt of contiguous read sequence identity for mapping to be accepted (default: 75%% of read length)")
     parser_a.add_argument('-l','--limit',type=int,default=None,help="Stop after a number of read pairs have beem processed, instead of processing everything (default: no limit)")
     parser_b=subparser.add_parser('analyze',help="Analyze mapped read pairs to detect and quantify large deletions")
-    parser_b.add_argument('map',nargs='?',default='',type=str,help="File containing the read pair maps in csv format (optional if no ambiguity)")
+    parser_b.add_argument('map',nargs='?',default='',type=str,help="Prefix of files containing the read and read pair maps (optional if no ambiguity)")
     parser_b.add_argument('genome',nargs='?',default='',type=str,help="File containing the genome in fasta format (optional if no ambiguity)")
-    parser_b.add_argument('-c','--clean',type=int,default=100,help="Filter out deletions larger than value expressed in %% of genome size (default: 100%% = no filtering)")
     parser_b.add_argument('-t','--threshold',type=int,default=-1,help="Minimum distance between paired reads for the pair to be considered a deletion (default: -1 = autodetect)")
     parser_b.add_argument('-m','--merge',type=int,default=-1,help="Maximum distance for merging deletions (default: -1 = autodetect)")
     parser_b.add_argument('-f','--format',type=str,default='png',help="File format for figures. Choices: svg, png, jpg, pdf, ps, eps, pgf, raw, rgba, tif. Default: png")
@@ -342,25 +341,22 @@ def locate(l):
     return L
 
 def analyze(args):
-    f=args.map
+    fname=args.map
     Genome=args.genome
-    clean=args.clean
     format=args.format
     threshold=args.threshold
     merge=args.merge
     include=args.include
-    if f[-6:]=='.fasta' or f[-3:]=='.fa':
+    if fname[-6:]=='.fasta' or fname[-3:]=='.fa':
         Genome=args.map
-        f=''
-    if args.genome[-4:]=='.csv':
-        f=args.genome
-    if not f:
-        x=glob.glob('*_map.csv')
-        if len(x)==1:
-            f=x[0]
-        else:
-            print('\n  Map file could not be detected unambiguously!\n')
-            sys.exit()
+        fname=args.genome
+    x=glob.glob(fname+'*_rmap.csv')
+    y=glob.glob(fname+'*_pmap.csv')
+    if len(x)==1 and len(y)==1 and x[0][:x[0].rfind('_')]==y[0][:y[0].rfind('_')]:
+        fname=x[0][:x[0].rfind('_')]
+    else:
+        print('\n  Map files could not be detected unambiguously!\n')
+        sys.exit()
     if not Genome:
         x=glob.glob('*.f*a')
         if len(x)==1:
@@ -368,41 +364,31 @@ def analyze(args):
         else:
             print('\n  Genome file could not be detected unambiguously!\n')
             sys.exit()
-    if clean>100 or clean<=0:
-        print('\n  Filter value should be any integer higher than 0 and not higher than 100 (recommended 50)!\n')
-        sys.exit()
     if format not in ('svg','png','jpg','jpeg','pdf','ps','eps','pgf','raw','rgba','tif','tiff'):
         print("\n  File format not recognized! Options are svg, png, jpg, pdf, ps, eps, pgf, raw, rgba, tif, tiff.\n")
         sys.exit()
     if include<=0 or include>100:
         print('\n  Include value should be between 0 and 100!\n')
         sys.exit()
-    check_file(f,True)
+    check_file(fname+'_rmap.csv',True)
+    check_file(fname+'_pmap.csv',True)
     check_file(Genome,True)
-    fname=f[:f.rfind('_')]
-    if clean!=100:
-        fname+='_c'+str(clean)
-    if threshold>=0:
-        fname+='_t'+str(threshold)
-    if merge>=0:
-        fname+='_m'+str(merge)
     gsize=len(readfasta(Genome))
-    filter=clean*gsize/100
-    rmap0=np.genfromtxt(f,delimiter=',').astype(int)
-    if rmap0[-1][0]>=gsize:
+    pmap0=np.genfromtxt(fname+'_pmap.csv',delimiter=',').astype(int)
+    rmap0=np.genfromtxt(fname+'_rmap.csv',delimiter=',').astype(int)
+    if pmap0[-1][0]>=gsize or rmap0[-1][0]>=gsize:
         print("\n  Wrong genome file!\n")
         sys.exit()
-    rmap0=rmap0[~(rmap0[:,1]>filter)]
-    x=rmap0[rmap0[:,2]>1].tolist()
-    rmap1=np.delete(rmap0,2,1)
+    x=pmap0[pmap0[:,2]>1].tolist()
+    pmap1=np.delete(pmap0,2,1)
     for i in range(len(x)):
         for j in range(x[i][2]-2):
             x.append(x[i][:-1])
         del x[i][-1]
-    rmap1=np.append(rmap1,x,0)
+    pmap1=np.append(pmap1,x,0)
     del x
-    rmap1=rmap1[rmap1[:,0].argsort()]
-    ins=round(np.mean(rmap1[:,1]))
+    pmap1=pmap1[pmap1[:,0].argsort()]
+    ins=round(np.mean(pmap1[:,1]))
 
 
 
@@ -410,83 +396,115 @@ def analyze(args):
 ###  plan to calculate threshold from distance distribution:
 
     d=defaultdict(int)
-    for n in rmap0:
+    for n in pmap0:
         d[n[1]]+=n[2]
 
 
 #### to be continued....
 
     if threshold<0:
-        threshold=round(np.mean(rmap1[rmap1[:,1]>0][:,1])*2+500)  #  Temporary threshold definition !
+        threshold=round(np.mean(pmap1[pmap1[:,1]>0][:,1])*2+500)  #  Temporary threshold definition !
 
 
-    ins0=round(np.mean(rmap1[rmap1[:,1]<threshold][:,1]))
-    ins1=round(np.mean(rmap1[rmap1[:,1]>=threshold][:,1]))
-    sd=round(np.std(rmap1[rmap1[:,1]<threshold][:,1]))
+    ins0=round(np.mean(pmap1[pmap1[:,1]<threshold][:,1]))
+    ins1=round(np.mean(pmap1[pmap1[:,1]>=threshold][:,1]))
+    sd=round(np.std(pmap1[pmap1[:,1]<threshold][:,1]))
+    f=fname
+    if threshold>=0:
+        f=fname+'_t'+str(threshold)
+    if merge>=0:
+        f=fname+'_m'+str(merge)
     if merge<0:
         merge=sd
-    h=open(fname+'_report.txt','w')
+    h=open(f+'_report.txt','w')
     pr2(h,'\n  Starting delfind analyze with the following settings:')
-    pr2(h,'  Map file: '+f+'\n  Genome file: '+Genome+'\n  Clean: '+str(clean)+'%\n  Threshold: '+str(threshold)+' bp'+'\n  Merge: '+str(merge)+' bp'+'\n  Format: '+format+'\n')
-    nr=np.size(rmap1,0)
-    nd=np.size(rmap1[rmap1[:,1]>=threshold],0)
-    pr2(h,'  Total number of read pairs: '+str(nr)+'\n  Deletion read pairs: '+str(nd)+' ('+str(round(nd/nr*100,2))+'%)')
+    pr2(h,'  Read map file: '+fname+'_rmap.csv\n  Read pair map file: '+fname+'_pmap.csv\n  Genome file: '+Genome+'\n  Threshold: '+str(threshold)+' bp'+'\n  Merge: '+str(merge)+' bp'+'\n  Format: '+format+'\n')
+    pr2(h,'  Number of reads in read file: '+str(np.sum(rmap0[:,2]))+'\n')
+    nrp=np.size(pmap1,0)
+    nd=np.size(pmap1[pmap1[:,1]>=threshold],0)
+    pr2(h,'  Total number of read pairs in read pair file: '+str(nrp)+'\n  Deletion read pairs: '+str(nd)+' ('+str(round(nd/nrp*100,2))+'%)')
     pr2(h,'  Average insert size: '+str(ins)+' bp\n  Average under threshold insert size: '+str(ins0)+' bp\n  Average above threshold insert (deletion) size: '+str(ins1)+' bp\n')
+    plt0('Distribution of read mapped sizes','Size (nt)','Number of reads')
+    x=defaultdict(int)
+    for n in rmap0:
+        x[n[1]]+=n[2]
+    n=np.array([(i,x[i]) for i in x])
+    plt.plot(n[:,0],n[:,1],marker='.',linestyle='',markersize=1)
+    g=f+'_mapped-size-distr.'+format
+    plt1(g,h)
     plt0('Distribution of read pair distances','Distance (bp)','Number of read pairs')
     x=np.array([(n,d[n]) for n in d if n<threshold])
     plt.plot(x[:,0],x[:,1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
     x=np.array([(n,d[n]) for n in d if n>=threshold])
     plt.plot(x[:,0],x[:,1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
     plt.legend(loc='upper right')
-    g=fname+'_distances-distr.'+format
+    g=f+'_distances-distr.'+format
+    plt1(g,h)
+    plt0('Distribution of mapped reads along genome','Genome position','Read mapped size (nt)')
+    plt.xlim(0,gsize)
+    plt.plot(rmap0[:,0],rmap0[:,1],marker='.',linestyle='',markersize=1)
+    g=f+'_mapped-reads-genome.'+format
     plt1(g,h)
     plt0('Distribution of read pair distances along genome','Genome position','Distance (bp)')
     plt.xlim(0,gsize)
-    plt.plot(rmap1[rmap1[:,1]<threshold][:,0],rmap1[rmap1[:,1]<threshold][:,1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
-    plt.plot(rmap1[rmap1[:,1]>=threshold][:,0],rmap1[rmap1[:,1]>=threshold][:,1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
+    plt.plot(pmap1[pmap1[:,1]<threshold][:,0],pmap1[pmap1[:,1]<threshold][:,1],label='<'+str(threshold),marker='.',linestyle='',markersize=1)
+    plt.plot(pmap1[pmap1[:,1]>=threshold][:,0],pmap1[pmap1[:,1]>=threshold][:,1],label='>='+str(threshold),marker='.',linestyle='',markersize=1)
     plt.legend(loc='upper left')
-    g=fname+'_distances-genome.'+format
+    g=f+'_distances-genome.'+format
     plt1(g,h)
+    plt0('Sequencing depth of mapped reads along genome','Genome position','Coverage')
     x=range(gsize)
-    y1=[0]*(gsize)
-    y2=[0]*(gsize)
+    y=[0]*(gsize)
     for n in rmap0:
         for i in range(n[1]):
-            if n[0]+i<gsize and n[1]<threshold:
-                y1[n[0]+i]+=n[2]
-            elif n[0]+i<gsize and n[1]>=threshold:
-                y2[n[0]+i]+=n[2]
-            elif n[0]+i>=gsize and n[1]<threshold:
-                y1[n[0]+i-gsize]+=n[2]
-            elif n[0]+i>=gsize and n[1]>=threshold:
-                y2[n[0]+i-gsize]+=n[2]
-    plt0('Sequencing coverage of read pair distances along genome','Genome position','Coverage')
+            if n[0]+i<gsize:
+                y[n[0]+i]+=n[2]
+            elif n[0]+i>=gsize:
+                y[n[0]+i-gsize]+=n[2]
     plt.xlim(0,gsize)
-    plt.stackplot(x,y1,y2,labels=['<'+str(threshold),'>='+str(threshold)])
-    plt.legend(loc='upper left')
-    g=fname+'_coverage.'+format
+    plt.stackplot(x,y)
+    g=f+'_read-coverage.'+format
     plt1(g,h)
+    n=[(x[i],y[i]) for i in range(len(x))]
+    g=f+'_read-coverage.csv'
+    np.savetxt(g,n,delimiter=',',fmt=['%d','%d'])
+    pr2(h,'  Read coverage was saved into file: '+g+'\n')
+    plt0('Sequencing depth of large (>='+str(threshold)+') read pair distances (deletions) along genome','Genome position','Coverage')
+    x=range(gsize)
+    y=[0]*(gsize)
+    for n in pmap0[pmap0[:,1]>=threshold]:
+        for i in range(n[1]):
+            if n[0]+i<gsize:
+                y[n[0]+i]+=n[2]
+            elif n[0]+i>=gsize:
+                y[n[0]+i-gsize]+=n[2]
+    plt.xlim(0,gsize)
+    plt.stackplot(x,y,color='red')
+    g=f+'_distance-coverage.'+format
+    plt1(g,h)
+
+
     dels=[]
     i=-1
     b=0
     rem=[]
-    while i+1<len(rmap0):
+    while i+1<len(pmap0):
         i+=1
-        if i in rem or rmap0[i][1]<threshold:
+        if i in rem or pmap0[i][1]<threshold:
             continue
-        x=(rmap0[i][0],)*2+(rmap0[i][0]+rmap0[i][1],)*2+(rmap0[i][2],)
+        x=(pmap0[i][0],)*2+(pmap0[i][0]+pmap0[i][1],)*2+(pmap0[i][2],)
         rem.append(i)
         b=i
-        while i+1<len(rmap0):
+        while i+1<len(pmap0):
             i+=1
-            if i in rem or rmap0[i][1]<threshold:
+            if i in rem or pmap0[i][1]<threshold:
                 continue
-            if rmap0[i][0]-x[1]>merge:
+            if pmap0[i][0]-x[1]>merge:
                 break
-            y=rmap0[i][0]+rmap0[i][1]
+            y=pmap0[i][0]+pmap0[i][1]
             if abs(y-x[2])>merge and abs(y-x[3])>merge:
                 continue
-            x=(min(x[0],rmap0[i][0]),max(x[1],rmap0[i][0]),min(x[2],y),max(x[3],y),x[4]+rmap0[i][2])
+            x=(min(x[0],pmap0[i][0]),max(x[1],pmap0[i][0]),min(x[2],y),max(x[3],y),x[4]+pmap0[i][2])
             rem.append(i)
         dels.append(x)
         i=b
@@ -507,11 +525,11 @@ def analyze(args):
     i=y.index(max(y))
     x1=dels[i][0]
     x2=dels[i][1]
-    y=np.size(rmap1[(rmap1[:,0]>=x1)&(rmap1[:,0]<=x2)],0)
+    y=np.size(pmap1[(pmap1[:,0]>=x1)&(pmap1[:,0]<=x2)],0)
     for i in range(len(dels)):
         dels[i]=dels[i]+(100*dels[i][4]/y,)
     dels.sort(key=lambda x:x[5], reverse=True)
-    g=fname+'_frequencies.csv'
+    g=f+'_del-frequencies.csv'
     np.savetxt(g,dels,delimiter=',',fmt=['%d','%d','%d','%d','%d','%f'])
     pr2(h,'  Deletion frequencies were saved into file: '+g+'\n')
 
@@ -524,25 +542,28 @@ def analyze(args):
 
     plt0('Deletion frequency as a function of deletion size','Deletion size','Deletion frequency')
     plt.plot([n[2]-n[1] for n in dels],[n[5] for n in dels],marker='.',linestyle='',markersize=1)
-    g=fname+'_frequency_size.'+format
+    g=f+'_frequency_size.'+format
     plt1(g,h)
     plt0('Deletion frequencies along genome','Genome position','Frequency (%)')
     plt.xlim(0,gsize)
     for n in dels:
         plt.plot((n[1],n[2]),(n[5],n[5]),alpha=0.4)
-    g=fname+'_locations_frequencies.'+format
+    g=f+'_locations_frequencies.'+format
     plt1(g,h)
     pr2(h,'  Top deletions (>='+str(include)+'%):\n        Genome location       Size (bp)   Frequency (%)')
     for n in dels:
         if n[5]<include:
             break
-        x='['+str(n[1]+1)+'..'+str(n[2])+']'
+        q=n[2]
+        if q>gsize:
+            q-=gsize
+        x='['+str(n[1]+1)+'..'+str(q)+']'
         y=str(n[2]-n[1])
         z=str(round(n[5],2))
         pr2(h,' '*(23-len(x))+x+' '*(16-len(y))+y+' '*(16-len(z))+z)
     pr2(h,'')
     h.close()
-    print('  Report was saved into file: '+fname+'_report.txt\n')
+    print('  Report was saved into file: '+f+'_report.txt\n')
 
 def snapgene(args):
     dels=args.deletions
