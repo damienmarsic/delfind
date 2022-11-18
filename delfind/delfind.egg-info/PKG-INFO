@@ -1,0 +1,18 @@
+Metadata-Version: 2.1
+Name: delfind
+Version: 0.9.10
+Summary: Find and quantify large deletions in populations of circular genomes from Illumina paired-end data
+Home-page: https://github.com/damienmarsic/delfind
+Author: Damien Marsic
+Author-email: damien.marsic@aliyun.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
+Classifier: Operating System :: OS Independent
+Classifier: Intended Audience :: Science/Research
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+# delfind
+Find and quantify large deletions in populations of circular genomes from Illumina paired-end data

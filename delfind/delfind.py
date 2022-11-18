@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-__version__='0.9.9'
-last_update='2021-12-07'
+__version__='0.9.10'
+last_update='2022-11-18'
 author='Damien Marsic, damien.marsic@aliyun.com'
 
 import argparse,sys,glob,gzip,os,time
@@ -257,8 +257,8 @@ def rmap(args):
         A=[a1,b1,a2,b2]
         x=sum([1 for n in A if n])
         if cnt[0] in show:
-            x=show[cnt[0]]
-            print('\r  Processing reads...      '+' '*(4-len(x))+x+'%',end='')
+            k=show[cnt[0]]
+            print('\r  Processing reads...      '+' '*(4-len(k))+k+'%',end='')
         if not x:
             continue
         if x==4:
@@ -389,25 +389,20 @@ def analyze(args):
             x=glob.glob(n+'*.f*a')
             if len(x)==1:
                 genome=x[0]
-    quit=False
+    fail=''
     if not fname:
-        print('\n  Map files could not be detected unambiguously!',end='')
-        quit=True
+        fail+='\n  Map files could not be detected unambiguously!'
     if genome:
         if not check_file(genome,False):
-            print('\n  File '+genome+' could not be found!',end='')
-            quit=True
+            fail+='\n  File '+genome+' could not be found!'
     else:
-        print('\n  Genome file could not be detected unambiguously!',end='')
-        quit=True
+        fail+='\n  Genome file could not be detected unambiguously!'
     if format not in ('svg','png','jpg','jpeg','pdf','ps','eps','pgf','raw','rgba','tif','tiff'):
-        print("\n  File format not recognized! Options are svg, png, jpg, pdf, ps, eps, pgf, raw, rgba, tif, tiff.",end='')
-        quit=True
+        fail+="\n  File format not recognized! Options are svg, png, jpg, pdf, ps, eps, pgf, raw, rgba, tif, tiff."
     if include<=0 or include>100:
-        print('\n  Include value should be between 0 and 100!',end='')
-        quit=True
-    if quit:
-        print('\n')
+        fail+='\n  Include value should be between 0 and 100!'
+    if fail:
+        print('\n'+fail+'\n')
         sys.exit()
     gsize=len(readfasta(genome))
     pmap0=np.genfromtxt(fname+'_pmap.csv',delimiter=',').astype(int)

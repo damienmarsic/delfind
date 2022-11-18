@@ -1,0 +1,8 @@
+LICENSE
+README.md
+setup.py
+delfind/delfind.py
+delfind/delfind.egg-info/PKG-INFO
+delfind/delfind.egg-info/SOURCES.txt
+delfind/delfind.egg-info/dependency_links.txt
+delfind/delfind.egg-info/top_level.txt
